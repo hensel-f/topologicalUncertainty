@@ -108,3 +108,32 @@ def build_graphs_from_deep_model(model, x_train, layers_id=None):
         graphs.append(graphs_per_layers)
 
     return graphs
+
+def build_adjacency_matrices_from_deep_model(model, x_train, layers_id=None):
+    '''
+    Given a tensorflow sequential model, a set of observations and a subset of layers to consider,
+    compute a list of lists of graphs, represented via their adjacency matrices, as  for the different layers and observations.
+
+    :param model: A tensorflow (sequential) model.
+    :param x_train: The set of observations used to compute means.
+    :param layers_id: an iterable (list, set...) of ids for the layers we want to focus on. If `None` (default) all
+                      (fc) layers are taken into account.
+    :return: a list of list of adjacency matrices. `adjacency_matrices[ell][id_train]` represents the activation graph of the `id_train`-th
+             observation at the  `layers_id[ell]`-th layer.
+    '''
+
+    adjacency_matrices = []
+
+    weights_tmp = _get_vertices_and_edges_values_from_input(model, x_train, layers_id)
+
+    weights = [[W[k] for W in weights_tmp] for k in range(len(x_train))]
+
+    for weights_per_layer in weights:
+        adjacency_matrices_per_layers = []
+
+        for W in weights_per_layer:
+            adjacency_matrices_per_layers.append(W)
+
+        adjacency_matrices.append(adjacency_matrices_per_layers)
+
+    return adjacency_matrices

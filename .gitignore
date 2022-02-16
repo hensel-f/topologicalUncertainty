@@ -1,2 +1,7 @@
 .ipynb_checkpoints
 .idea/
+utils/__pycache__
+
+*.lock
+*.toml
+*~

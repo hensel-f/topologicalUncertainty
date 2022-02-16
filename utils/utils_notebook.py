@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import utils.utils_tda as utda
 
-def plot_TU_and_confidence(distribs, confidences, dataset, dataset_ood):
+def plot_feature_and_confidence(distribs, confidences, dataset, dataset_ood, name='TU'):
     fig, axs = plt.subplots(1, 2, figsize=(18, 6))
 
     L = ['(a)', '(b)'] #, '(c)', '(d)']
@@ -18,7 +18,7 @@ def plot_TU_and_confidence(distribs, confidences, dataset, dataset_ood):
     axs[0].hist(dists_true, color='blue', alpha=1, label='True-%s (Train)' %dataset, weights = np.ones_like(dists_true)/len(dists_true))
     axs[0].hist(dists_fake, color='green', alpha=0.5, label='Fake-%s (OOD)' %dataset, weights = np.ones_like(dists_fake)/len(dists_fake))
     axs[0].hist(dists_2, color='red', alpha=0.5, label='%s (OOD)' %dataset_ood, weights = np.ones_like(dists_2)/len(dists_2))
-    axs[0].set_xlabel('%s Distrib.~of TU (Train: %s)' %(L[0],dataset), fontsize=22)
+    axs[0].set_xlabel(f'%s Distrib.~of {name} (Train: %s)' %(L[0],dataset), fontsize=22)
     axs[0].legend(fontsize=20)
 
     axs[1].hist(confs_fake, color='green', alpha=1, label='Fake-%s (OOD)' %dataset, bins = np.linspace(0,1,11), weights=np.ones_like(confs_fake)/len(confs_fake))

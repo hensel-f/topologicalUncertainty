@@ -66,7 +66,7 @@ def diag_from_numpy_array(A, dim=0):
     We use the Rips filtration of negative weight values (then flip the diagram), so that it is equivalent to
     superlevel set filtration.
     :param A: A numpy adjacency matrix of size (n x n) representing a graph.
-    :return: A numpy arrau representing the corresponding persistence diagram (size n-1).
+    :return: A numpy array representing the corresponding persistence diagram (size n-1).
     '''
     n = A.shape[0]
     assert np.min(A) >= 0
@@ -140,6 +140,18 @@ def wasserstein_distance_1D(a, b, p=2., average=True, thresh=None):
     else:
         return res
 
+def total_persistence(diag, p=2., average=True, thresh=None):
+    '''
+    Given a set of points, compute the 1D Wasserstein distance to the set of the same cardinality, consisting only of 0 entries.
+
+    :param diag: 1D set of points.
+    :param p: Wasserstein exponent, in [1, +np.inf].
+    :param average: if True, the Wasserstein distance is divided by the cardinality of the point clouds (normalization).
+    :return: 1D Wasserstein distance between diag and the 0-diagram.
+    '''
+    diag_0 = np.zeros(np.shape(diag))
+    return wasserstein_distance_1D(diag, diag_0, p=p, average=average, thresh=thresh)
+
 
 def barycenters_of_set_from_deep_model(model, x, layers_id=None):
     '''
@@ -160,6 +172,20 @@ def barycenters_of_set_from_deep_model(model, x, layers_id=None):
     wbarys = [wasserstein_barycenter_1D(pc) for pc in point_clouds_per_layer]
 
     return wbarys
+
+def mean_adjacency_matrices_from_deep_model(model, x, layers_id=None):
+    '''
+    Given a model, a (sub)set of (training) observations and a subset of layers to consider, compute the corresponding
+    averaged adjacency matrices (one for each layer).
+
+    :param model: a tensorflow sequential model.
+    :param x: Set of observations (usually belonging to a same class in the training set).
+    :param layers_id: layers for which we compute an averaged adjacency matrix. If `None`, all (fully-connected) layers are used.
+    :return: list of list of averaged adjacency matrices (1D numpy.array).
+    '''
+    adjacency_matrices = ug.build_adjacency_matrices_from_deep_model(model, x, layers_id=layers_id)
+
+    return np.mean(adjacency_matrices, axis=0)
 
 
 def topological_uncertainty(model, x, all_barycenters,
@@ -201,6 +227,57 @@ def topological_uncertainty(model, x, all_barycenters,
     else:
         raise ValueError('aggregation=%s is not valid. Set it to mean (default) or max.' %aggregation)
 
+
+def topological_difference(model, x, all_mean_adjacency_matrices,
+                            layers_id=None, aggregation="mean", p=2., normalize_wasserstein=True, absolute_value=True):
+    '''
+
+    :param model: tensorflow sequential model.
+    :param x: set of observations for which we want to compute Topological Uncertainty. Must be valid entries for `model`.
+    :param all_mean_adjacency_matrices: list of list of adjacency matrices; all_mean_adjacency_matrices[label_id][ell] represents the
+                            mean adjacency matrix corresponding to the `label_id`-th class and the `layer_id[ell]`-th layer.
+                            Typically obtained by calling `mean_adjacency_matrices_from_deep_model`.
+    :param layers_id: layers for which we compute Topological Difference. Must be the same as the one used to compute
+    mean adjacency matrices first.
+    :param aggregation: How TU-per-layer is aggregated. Default: `mean`, i.e. averaging through layers.
+                        If `max`,  maximum TU over layers is taken into account;
+                        If `None`, return an array representing the TU for all layers considered.
+    :param p: Wasserstein exponent used to compute distances. Default is p=2., consistent with Fréchet mean computation.
+    :param normalize_wasserstein: If True, divide the distance between diagrams by their cardinality (helps making things
+                                  comparable layer-wise).
+    :param absolute_value: Boolean flag, indicating whether taking the absolute value of the difference of adjacency matrices or not.
+    :return: Topological Difference values for all observations. If `aggregation` is `None`, it is a
+             (nb_obs x nb_layers) numpy.array.
+             Otherwise, it is a (nb_obs) numpy.array.
+    '''
+    def a_val(absolute_value):
+        if absolute_value:
+            return lambda x: np.abs(x)
+        else:
+            return lambda x: x
+
+    abs_val_fct = a_val(absolute_value)
+
+    nlayer = len(all_mean_adjacency_matrices[0])  # number of layers used
+    predicted_classes = np.argmax(model.predict(x), axis=-1)
+    adjacency_matrices = ug.build_adjacency_matrices_from_deep_model(model, x, layers_id=layers_id)
+
+
+    matrix_diff = [[abs_val_fct(A[ell] - all_mean_adjacency_matrices[predicted_class][ell]) for ell in range(nlayer)]
+                    for (A, predicted_class) in zip(adjacency_matrices, predicted_classes)]
+
+    diags = [[diag_from_numpy_array(B) for B in matrix_diff[idx]] for idx in range(len(matrix_diff))]
+
+    res = np.array([[total_persistence(d, p=p) for d in diags[idx]] for idx in range(len(diags))])
+
+    if aggregation=='mean':
+        return np.mean(res,axis=1)
+    elif aggregation=='max':
+        return np.max(res,axis=1)
+    elif aggregation is None:
+        return res
+    else:
+        raise ValueError('aggregation=%s is not valid. Set it to mean (default) or max.' %aggregation)
 
 def plot_1d_diagram(dgm, ax=None, color='blue', xlim=None):
     n = dgm.shape
