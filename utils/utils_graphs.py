@@ -13,7 +13,7 @@ except ImportError:
 
 def _matrix_and_input(x_train, W):
     '''
-    :param x_train: a N x D dataset (N points, dimension D). Can be the "latent dataset" in a hidden layer.
+    :param x_train: an N x D dataset (N points, dimension D). Can be the "latent dataset" in a hidden layer.
     :param W: a D x D' weight matrix.
     :return: activated weights, i.e. (x_train[k][i] W[i,j]) for i=1..D, for k = 1..N
     '''
@@ -24,7 +24,7 @@ def _get_vertices_and_edges_values_from_input(model, x_train, layers_id=None, on
     '''
     :param model: a tensorflow model
     :param x_train: n_train x d0 input dataset.
-    :param layers_id: a iterable (list, set...) of ids for the layers we want to focus on. If `None` (default) all
+    :param layers_id: an iterable (list, set...) of ids for the layers we want to focus on. If `None` (default) all
                       (fc) layers are taken into account.
     :param only_fc: Only consider fully connected layers ("dense" in tensorflow). Only `True` available as of now.
     :return: a list of edges values. `X[ell][j]` gives the values of the `layers_id[ell]`-th layer

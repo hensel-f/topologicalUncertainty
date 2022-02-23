@@ -6,6 +6,7 @@
 import numpy as np
 import utils.utils_graphs as ug
 import gudhi as gd
+import warnings
 try:
     import matplotlib.pyplot as plt
 except:
@@ -69,12 +70,14 @@ def diag_from_numpy_array(A, dim=0):
     :return: A numpy array representing the corresponding persistence diagram (size n-1).
     '''
     n = A.shape[0]
-    assert np.min(A) >= 0
+    # assert np.min(A) >= 0
+    if np.min(A) < 0:
+        warnings.warn('Warning: The distance matrix contains negative values!')
     rc = gd.RipsComplex(distance_matrix=-A)  # take negative values of A for superlevel set filtration
     if dim == 0:
         st = rc.create_simplex_tree(max_dimension=1)
-        # must do this somewhat dirty trick to ensures the filtration to work properly (because of the negative entries
-        # in the matrix. 
+        # must do this somewhat dirty trick to ensure the filtration to work properly (because of the negative entries
+        # in the matrix).
         for x in st.get_simplices():
             if len(x[0]) == 1:
                 st.assign_filtration(x[0], -np.inf)
@@ -86,6 +89,7 @@ def diag_from_numpy_array(A, dim=0):
     else:
         raise ValueError('dim = %s not allowed. dim must be 0 or 1.' %dim)
     dgm = diagram_from_simplex_tree(st, mode="superlevel", dim=dim)
+    # dgm = diagram_from_simplex_tree(st, mode="sublevel", dim=dim)
     return dgm
 
 
@@ -127,6 +131,8 @@ def wasserstein_distance_1D(a, b, p=2., average=True, thresh=None):
     n = a.shape[0]
     assert b.shape[0] == n
 
+    ## Note: overflows can occur in the following. This should be fixed!
+
     if thresh is not None:
         a = a[:thresh]
         b = b[:thresh]
@@ -135,6 +141,11 @@ def wasserstein_distance_1D(a, b, p=2., average=True, thresh=None):
         res = np.max(np.abs(np.sort(a) - np.sort(b)))
     else:
         res = np.sum(np.abs(np.sort(a) - np.sort(b))**p)**(1./p)
+
+    # print('a:\n', a)
+    # print('b:\n', b)
+    # print('res / n :', res / n)
+
     if average:
         return res / n
     else:
@@ -189,7 +200,7 @@ def mean_adjacency_matrices_from_deep_model(model, x, layers_id=None):
 
 
 def topological_uncertainty(model, x, all_barycenters,
-                            layers_id=None, aggregation='mean', p=2., normalize_wasserstein=True):
+                            layers_id=None, aggregation='mean', p=2., normalize_wasserstein=True, all_classes=False):
     '''
 
     :param model: tensorflow sequential model.
@@ -211,25 +222,43 @@ def topological_uncertainty(model, x, all_barycenters,
     '''
     nlayer = len(all_barycenters[0])  # number of layers used
     predicted_classes = np.argmax(model.predict(x), axis=-1)
+    num_classes = model.predict(x).shape[-1]
+    classes = range(num_classes)
     graphs = ug.build_graphs_from_deep_model(model, x, layers_id=layers_id)
     diags = diags_from_graphs(graphs)
 
-    res = np.array([[wasserstein_distance_1D(diags_per_layer[ell], all_barycenters[predicted_class][ell],
+    if not all_classes:
+        res = np.array([[wasserstein_distance_1D(diags_per_layer[ell], all_barycenters[predicted_class][ell],
                                              p=p, average=normalize_wasserstein) for ell in range(nlayer)]
                      for (diags_per_layer, predicted_class) in zip(diags, predicted_classes)])
 
-    if aggregation=='mean':
-        return np.mean(res,axis=1)
-    elif aggregation=='max':
-        return np.max(res,axis=1)
-    elif aggregation is None:
-        return res
+        if aggregation=='mean':
+            return np.mean(res,axis=1)
+        elif aggregation=='max':
+            return np.max(res,axis=1)
+        elif aggregation is None:
+            return res
+        else:
+            raise ValueError('aggregation=%s is not valid. Set it to mean (default) or max.' %aggregation)
+
     else:
-        raise ValueError('aggregation=%s is not valid. Set it to mean (default) or max.' %aggregation)
+        res = np.array([[[wasserstein_distance_1D(diags_per_layer[ell], all_barycenters[_class][ell],
+                                                 p=p, average=normalize_wasserstein)
+                                                 for ell in range(nlayer)] for (diags_per_layer, _class) in zip(diags, np.full(predicted_classes.shape, cl))] for cl in classes])
+
+        if aggregation == 'mean':
+            return np.transpose(np.array([np.mean(r, axis=1) for r in res]))
+        elif aggregation == 'max':
+            return np.transpose(np.array([np.max(r, axis=1) for r in res]))
+        elif aggregation is None:
+            return res
+        else:
+            raise ValueError('aggregation=%s is not valid. Set it to mean (default) or max.' % aggregation)
 
 
 def topological_difference(model, x, all_mean_adjacency_matrices,
-                            layers_id=None, aggregation="mean", p=2., normalize_wasserstein=True, absolute_value=True):
+                            layers_id=None, aggregation="mean", p=2.,
+                           normalize_wasserstein=True, absolute_value=True, all_classes=False):
     '''
 
     :param model: tensorflow sequential model.
@@ -260,24 +289,58 @@ def topological_difference(model, x, all_mean_adjacency_matrices,
 
     nlayer = len(all_mean_adjacency_matrices[0])  # number of layers used
     predicted_classes = np.argmax(model.predict(x), axis=-1)
+    num_predicted_classes = np.shape(predicted_classes)[0]
+    num_classes = model.predict(x).shape[-1]
+    classes = range(num_classes)
     adjacency_matrices = ug.build_adjacency_matrices_from_deep_model(model, x, layers_id=layers_id)
 
+    if not all_classes:
+        matrix_diff = [[abs_val_fct(A[ell] - all_mean_adjacency_matrices[predicted_class][ell]) for ell in range(nlayer)]
+                        for (A, predicted_class) in zip(adjacency_matrices, predicted_classes)]
 
-    matrix_diff = [[abs_val_fct(A[ell] - all_mean_adjacency_matrices[predicted_class][ell]) for ell in range(nlayer)]
-                    for (A, predicted_class) in zip(adjacency_matrices, predicted_classes)]
+        diags = [[diag_from_numpy_array(B) for B in matrix_diff[idx]] for idx in range(len(matrix_diff))]
 
-    diags = [[diag_from_numpy_array(B) for B in matrix_diff[idx]] for idx in range(len(matrix_diff))]
+        res = np.array([[total_persistence(d, p=p) for d in diags[idx]] for idx in range(len(diags))])
 
-    res = np.array([[total_persistence(d, p=p) for d in diags[idx]] for idx in range(len(diags))])
+        if aggregation=='mean':
+            return np.mean(res,axis=1)
+        elif aggregation=='max':
+            return np.max(res,axis=1)
+        elif aggregation is None:
+            return res
+        else:
+            raise ValueError('aggregation=%s is not valid. Set it to mean (default) or max.' %aggregation)
 
-    if aggregation=='mean':
-        return np.mean(res,axis=1)
-    elif aggregation=='max':
-        return np.max(res,axis=1)
-    elif aggregation is None:
-        return res
     else:
-        raise ValueError('aggregation=%s is not valid. Set it to mean (default) or max.' %aggregation)
+        matrix_diff = [
+            [
+             [
+             abs_val_fct(A[ell] - all_mean_adjacency_matrices[_class][ell]) for ell in range(nlayer)
+             ]
+            for (A, _class) in zip(adjacency_matrices, np.full(predicted_classes.shape, cl))
+            ]
+            for cl in classes
+            ]
+
+        # diags = [[[diag_from_numpy_array(B) for B in matrix_diff[i][idx]] for idx in range(len(matrix_diff[i]))] for i in range(len(matrix_diff))]
+        #
+        # res = np.array([np.array([[total_persistence(d, p=p) for d in diags[i][idx]] for idx in range(len(diags[i]))]) for i in range(len(diags))])
+        # print('matrix diff shape: ', np.array(matrix_diff).shape)
+
+        diags = [[[diag_from_numpy_array(B) for B in matrix_diff[cl][pcl]] for pcl in range(num_predicted_classes)] for cl in classes]# for ell in range(nlayer)])
+
+        # print('diags\n', np.array(diags).shape)
+
+        res = np.array([np.array([[total_persistence(d, p=p) for d in diags[cl][pcl]] for pcl in range(num_predicted_classes)]) for cl in classes])# for cl in classes])
+
+        if aggregation == 'mean':
+            return np.transpose(np.array([np.mean(r, axis=-1) for r in res])), diags, adjacency_matrices, matrix_diff# return np.transpose(np.array([np.mean(r, axis=1) for r in res])), diags, adjacency_matrices, matrix_diff
+        elif aggregation == 'max':
+            return np.transpose(np.array([np.max(r, axis=1) for r in res]))
+        elif aggregation is None:
+            return res
+        else:
+            raise ValueError('aggregation=%s is not valid. Set it to mean (default) or max.' % aggregation)
 
 def plot_1d_diagram(dgm, ax=None, color='blue', xlim=None):
     n = dgm.shape
