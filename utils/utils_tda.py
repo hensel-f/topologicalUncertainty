@@ -30,8 +30,8 @@ def diagram_from_simplex_tree(st, mode, dim=0):
     if dim==0:
         return dgm0
     elif dim==1:
-        dgm1 = st.persistence_intervals_in_dimension(1)[:,0]
-        return dgm0, dgm1
+        dgm1 = st.persistence_intervals_in_dimension(1)#[:,0]
+        return dgm1 #dgm0, dgm1
 
 
 def dgm_per_layers_from_graphs(graphs_per_layers):
@@ -258,7 +258,7 @@ def topological_uncertainty(model, x, all_barycenters,
 
 def topological_difference(model, x, all_mean_adjacency_matrices,
                             layers_id=None, aggregation="mean", p=2.,
-                           normalize_wasserstein=True, absolute_value=True, all_classes=False):
+                           normalize_wasserstein=True, absolute_value=True, all_classes=False, dim=0):
     '''
 
     :param model: tensorflow sequential model.
@@ -275,15 +275,28 @@ def topological_difference(model, x, all_mean_adjacency_matrices,
     :param normalize_wasserstein: If True, divide the distance between diagrams by their cardinality (helps making things
                                   comparable layer-wise).
     :param absolute_value: Boolean flag, indicating whether taking the absolute value of the difference of adjacency matrices or not.
+    :param dim: Persistence homology dimension, must be 0 or 1.
     :return: Topological Difference values for all observations. If `aggregation` is `None`, it is a
              (nb_obs x nb_layers) numpy.array.
              Otherwise, it is a (nb_obs) numpy.array.
     '''
+    if dim not in [0, 1]:
+        raise ValueError(f'Persistent homology dimension {dim} is not supported. Only 0 or 1 is allowed.' % aggregation)
+    if dim == 1:
+        warnings.warn('Caution: Support for homology dimension 1 is not guaranteed to work properly.')
+
     def a_val(absolute_value):
         if absolute_value:
             return lambda x: np.abs(x)
         else:
             return lambda x: x
+    def diagram_reduction(dim=0):
+        if dim == 0:
+            return lambda x: x
+        else:
+            return lambda x : np.abs(x[:,1] - x[:,0])
+
+    red_fct = diagram_reduction(dim)
 
     abs_val_fct = a_val(absolute_value)
 
@@ -298,10 +311,22 @@ def topological_difference(model, x, all_mean_adjacency_matrices,
         matrix_diff = [[abs_val_fct(A[ell] - all_mean_adjacency_matrices[predicted_class][ell]) for ell in range(nlayer)]
                         for (A, predicted_class) in zip(adjacency_matrices, predicted_classes)]
 
-        diags = [[diag_from_numpy_array(B) for B in matrix_diff[idx]] for idx in range(len(matrix_diff))]
+        #print('matrix diff', np.array(matrix_diff).shape)
 
-        res = np.array([[total_persistence(d, p=p) for d in diags[idx]] for idx in range(len(diags))])
+        diags = [[red_fct(diag_from_numpy_array(B, dim=dim)) for B in matrix_diff[idx]] for idx in range(len(matrix_diff))]
 
+        # red_diags = [[red_fct(B) for B in diags[idx]] for idx in range(len(diags))]
+
+
+        # print('diags\n', np.array(diags).shape)
+        # print('red_diags: ', np.array(red_diags).shape)
+        # print('diags\n', np.array(diags))
+        # print('red_diags: ', np.array(red_diags))
+
+        res = np.array([[p_norm(d,p=p) for d in diags[idx]] for idx in range(len(diags))])
+        ## unecessary to use the wasserstein distance in this case:
+        # res = np.array([[total_persistence(d, p=p) for d in diags[idx]] for idx in range(len(diags))])
+        ##
         if aggregation=='mean':
             return np.mean(res,axis=1)
         elif aggregation=='max':
@@ -327,16 +352,31 @@ def topological_difference(model, x, all_mean_adjacency_matrices,
         # res = np.array([np.array([[total_persistence(d, p=p) for d in diags[i][idx]] for idx in range(len(diags[i]))]) for i in range(len(diags))])
         # print('matrix diff shape: ', np.array(matrix_diff).shape)
 
-        diags = [[[diag_from_numpy_array(B) for B in matrix_diff[cl][pcl]] for pcl in range(num_predicted_classes)] for cl in classes]# for ell in range(nlayer)])
+
+        ## WARNING: The 'clip' here is a fix for the overfloe errors of unknown origin!! Needs investigation.
+        diags = [
+            [[np.clip(diag_from_numpy_array(B, dim=dim), None, np.max(B) - np.min(B)) for B in matrix_diff[cl][pcl]] for
+             pcl in range(num_predicted_classes)] for cl in classes]  # for ell in range(nlayer)])
+        # diags = [
+        #     [[diag_from_numpy_array(B, dim=dim) for B in matrix_diff[cl][pcl]] for
+        #      pcl in range(num_predicted_classes)] for cl in classes]  # for ell in range(nlayer)])
+
+
 
         # print('diags\n', np.array(diags).shape)
 
-        res = np.array([np.array([[total_persistence(d, p=p) for d in diags[cl][pcl]] for pcl in range(num_predicted_classes)]) for cl in classes])# for cl in classes])
-
+        res = np.array(
+            [np.array([[p_norm(d, p=p) for d in diags[cl][pcl]] for pcl in range(num_predicted_classes)]) for
+             cl in classes])  # for cl in classes])
+        ## unecessary to use the wasserstein distance in this case:
+        # res = np.array(
+        #     [np.array([[total_persistence(d, p=p) for d in diags[cl][pcl]] for pcl in range(num_predicted_classes)]) for
+        #      cl in classes])  # for cl in classes])
+        ##
         if aggregation == 'mean':
             return np.transpose(np.array([np.mean(r, axis=-1) for r in res])), diags, adjacency_matrices, matrix_diff# return np.transpose(np.array([np.mean(r, axis=1) for r in res])), diags, adjacency_matrices, matrix_diff
         elif aggregation == 'max':
-            return np.transpose(np.array([np.max(r, axis=1) for r in res]))
+            return np.transpose(np.array([np.max(r, axis=-1) for r in res]))
         elif aggregation is None:
             return res
         else:
@@ -360,3 +400,19 @@ def plot_1d_diagram(dgm, ax=None, color='blue', xlim=None):
     #ax.set_yticks([])
     if xlim is not None:
         ax.set_xlim(xlim)
+
+def p_norm(a, p=2., average=True):
+    '''
+    :param a: numpy array of shape (1,).
+    :param p: Exponent of the norm in [1,+inf].
+    '''
+    normalization_factor = 1.
+    if average:
+        normalization_factor = a.shape[0]
+
+    if p == 2.:
+        return np.linalg.norm(a) / normalization_factor
+    elif p == np.inf:
+        return np.max(a) / normalization_factor
+    else:
+        return np.sum(a ** p) ** (1./p) / normalization_factor
